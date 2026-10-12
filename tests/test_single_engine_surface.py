@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from hydra import compose, initialize_config_dir
 from hydra.errors import ConfigCompositionException
@@ -9,6 +10,32 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class SingleEngineSurfaceTests(unittest.TestCase):
+    def test_cli_exit_status_matches_final_evaluation(self):
+        import main
+        from omegaconf import OmegaConf
+
+        for status in ("completed", "validation_failed", "test_failed"):
+            with (
+                self.subTest(status=status),
+                mock.patch.object(main.HydraConfig, "get", return_value=OmegaConf.create(
+                    {"runtime": {"output_dir": str(ROOT / "artifacts")}}
+                )),
+                mock.patch.object(main, "ConsoleReporter") as reporter_type,
+                mock.patch.object(main, "configure_third_party_logging"),
+                mock.patch.object(main, "dispatch_run", return_value={
+                    "status": status, "test": {"failure_reason": "pipeline timeout"}
+                }),
+            ):
+                if status == "completed":
+                    main.main.__wrapped__(OmegaConf.create({}))
+                    reporter_type.return_value.error.assert_not_called()
+                else:
+                    with self.assertRaises(SystemExit) as raised:
+                        main.main.__wrapped__(OmegaConf.create({}))
+                    self.assertEqual(raised.exception.code, 1)
+                    self.assertIn(status, reporter_type.return_value.error.call_args.args[0])
+                reporter_type.return_value.close.assert_called_once()
+
     def test_default_config_uses_general_generation_driven_training(self):
         with initialize_config_dir(config_dir=str((ROOT / "cfg").resolve()), version_base=None):
             cfg = compose(

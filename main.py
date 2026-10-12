@@ -128,7 +128,14 @@ def main(cfg: DictConfig) -> None:
         str(cfg_get(cfg, "logging.third_party_level", "WARNING")), reporter
     )
     try:
-        dispatch_run(cfg, run_dir, reporter)
+        result = dispatch_run(cfg, run_dir, reporter)
+        if result["status"] != "completed":
+            reporter.error(
+                f"Run failed: status={result['status']}; "
+                f"reason={result.get('test', {}).get('failure_reason') or 'no valid validation champion'}; "
+                f"result={run_dir / 'result.json'}"
+            )
+            raise SystemExit(1)
     except BaseException as exc:
         if isinstance(exc, (KeyboardInterrupt, SystemExit)):
             raise

@@ -8,7 +8,7 @@ def _rebuild(selected, removed, n, adj):
     random.shuffle(order)
     order.sort(key=lambda v: len(adj[v]))
     for vertex in order:
-        if not (adj[vertex] & chosen):
+        if adj[vertex].isdisjoint(chosen):
             chosen.add(vertex)
     return chosen
 

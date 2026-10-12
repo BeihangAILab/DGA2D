@@ -801,7 +801,8 @@ class PaperRLTrainer:
             "best_validation_reward": best_validation,
             "test": test_result.to_log_dict(),
             "test_gap_percent": (
-                None if test_result.failed else -100.0 * float(test_result.raw_reward)
+                None if test_result.failed or not best_metadata.get("champion_nodes")
+                else -100.0 * float(test_result.raw_reward)
             ),
             "generations_planned": generations,
             "generations_completed": completed_generation,
@@ -817,11 +818,18 @@ class PaperRLTrainer:
         result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         if _source_hashes(self.source_slots) != manifest["baseline_source_hashes"]:
             raise RuntimeError("Baseline slots changed during Paper-RL training")
-        self.reporter.complete(
-            test_result.raw_reward,
-            result_path,
-            time.perf_counter() - run_started,
-        )
+        if result["status"] == "completed":
+            self.reporter.complete(
+                test_result.raw_reward,
+                result_path,
+                time.perf_counter() - run_started,
+            )
+        else:
+            self.reporter.error(
+                f"{result['status']}: "
+                f"{test_result.failure_reason or 'no valid validation champion'}; "
+                f"result={result_path}"
+            )
         return result
 
 

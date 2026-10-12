@@ -450,5 +450,114 @@ class OperatorBehaviorTests(unittest.TestCase):
         self.assertEqual(results, [1.0, 10.0])
 
 
+
+
+# Scalar reference preserves the pre-optimization MIS search for equivalence tests.
+def _scalar_mis_search(env_data, state, calc_makespan_fn):
+    n = env_data["num_vertices"]
+    adj = env_data["adj"]
+    seq = np.array(state.sequence, dtype=np.int32)
+    best_seq = seq.copy()
+    best_mk = state.makespan
+
+    for _ in range(30):
+        r = random.random()
+        if r < 0.6:
+            ones = [i for i in range(n) if seq[i] == 1]
+            if not ones:
+                continue
+            v_remove = random.choice(ones)
+            seq[v_remove] = 0
+            blocked = np.zeros(n, dtype=np.int32)
+            for i in range(n):
+                if seq[i] == 1:
+                    for u in adj[i]:
+                        blocked[u] = 1
+            degrees = np.array([len(adj[i]) for i in range(n)], dtype=np.int32)
+            candidates = [i for i in range(n) if seq[i] == 0 and blocked[i] == 0]
+            candidates.sort(key=lambda i: degrees[i])
+            for c in candidates:
+                if blocked[c] == 0:
+                    seq[c] = 1
+                    for u in adj[c]:
+                        blocked[u] = 1
+        else:
+            blocked = np.zeros(n, dtype=np.int32)
+            for i in range(n):
+                if seq[i] == 1:
+                    for u in adj[i]:
+                        blocked[u] = 1
+            candidates = [i for i in range(n) if seq[i] == 0 and blocked[i] == 0]
+            if not candidates:
+                continue
+            degrees = np.array([len(adj[i]) for i in range(n)], dtype=np.int32)
+            candidates.sort(key=lambda i: degrees[i])
+            for c in candidates[:5]:
+                seq[c] = 1
+                mk = calc_makespan_fn(seq, env_data)
+                if mk < best_mk:
+                    best_mk = mk
+                    best_seq = seq.copy()
+                    break
+                seq[c] = 0
+
+        mk = calc_makespan_fn(seq, env_data)
+        if mk < best_mk:
+            best_mk, best_seq = mk, seq.copy()
+        else:
+            seq = best_seq.copy()
+
+    state.sequence, state.makespan = best_seq, best_mk
+    return state
+
+
+class MISAccelerationTests(unittest.TestCase):
+    def test_search_preserves_solution_score_evaluations_and_random_state(self):
+        from src.problems.mis import domain_evaluator as domain
+        optimized = load_slot(ROOT / "src/problems/mis/slots/local_search/ls_mis/v1.py").run
+        for density in (0.0, 0.15, 0.7, 1.0):
+            graph_rng = random.Random(91)
+            n = 31
+            adj = [set() for _ in range(n)]
+            for i in range(n):
+                for j in range(i + 1, n):
+                    if graph_rng.random() < density:
+                        adj[i].add(j)
+                        adj[j].add(i)
+            env = {"num_vertices": n, "adj": adj}
+            for seed in range(8):
+                with self.subTest(density=density, seed=seed):
+                    outcomes = []
+                    for search in (_scalar_mis_search, optimized):
+                        random.seed(seed)
+                        np.random.seed(seed)
+                        state = SolutionState(np.zeros(n, dtype=np.int32), 0.0)
+                        calls = []
+                        def evaluate(sequence, data):
+                            calls.append(tuple(sequence))
+                            return domain.calc_makespan(sequence, data)
+                        search(env, state, evaluate)
+                        outcomes.append((state.sequence.tolist(), state.makespan,
+                                         state.metadata, calls, random.getstate(),
+                                         np.random.get_state()[1].tolist()))
+                    self.assertEqual(outcomes[0], outcomes[1])
+
+    def test_score_matches_pairwise_reference_and_rejects_invalid_inputs(self):
+        from src.problems.mis import domain_evaluator as domain
+        n = 8
+        adj = [{j for j in range(n) if j != i and (i + j) % 3 == 0} for i in range(n)]
+        env = {"num_vertices": n, "adj": adj}
+        for mask in range(1 << n):
+            seq = [(mask >> i) & 1 for i in range(n)]
+            ones = [i for i in range(n) if seq[i]]
+            invalid = any(v in adj[u] for i, u in enumerate(ones) for v in ones[i + 1:])
+            expected = domain.INVALID_SCORE if invalid else -float(len(ones))
+            self.assertEqual(domain.calc_makespan(seq, env), expected)
+            self.assertEqual(domain.calc_makespan(SolutionState(seq), env), expected)
+        for seq in ([0] * 7, [0] * 9, [2] + [0] * 7, [-1] + [0] * 7,
+                    [0.5] + [0] * 7, [float("nan")] + [0] * 7):
+            self.assertEqual(domain.calc_makespan(seq, env), domain.INVALID_SCORE)
+
+
 if __name__ == "__main__":
     unittest.main()

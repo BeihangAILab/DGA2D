@@ -143,6 +143,7 @@ class RecordingReporter(TrainingReporter):
             "evolution",
             "checkpoint",
             "complete",
+            "error",
         }:
 
             def record(*args, **kwargs):
@@ -205,7 +206,7 @@ class FullTrainerIntegrationTests(unittest.TestCase):
         class FailedValidation(FakeEvaluator):
             def evaluate(self, samples, instances, standardize=True, evaluation_seed=0):
                 results = super().evaluate(samples, instances, standardize, evaluation_seed)
-                if evaluation_seed >= 10_000_000:
+                if 10_000_000 <= evaluation_seed < 20_000_000:
                     for result in results:
                         result.failed = True
                         result.raw_reward = -5.0
@@ -221,16 +222,55 @@ class FullTrainerIntegrationTests(unittest.TestCase):
                 encoding="utf-8",
             )
             config = self.config(temp / "model_cache", checkpoints=True)
+            reporter = RecordingReporter()
             trainer = PaperRLTrainer(
                 FakeDomain, "fake", config, str(temp / "source"),
                 str(temp / "run"), str(ROOT), policy_factory=FakePolicy,
                 evaluator_factory=FailedValidation, llm_client=FakeLLM(),
+                reporter=reporter,
             )
             result = trainer.run()
             self.assertEqual(result["status"], "validation_failed")
+            self.assertFalse(result["test"]["failed"])
             self.assertIsNone(result["test_gap_percent"])
             self.assertFalse((temp / "run/checkpoints/best").exists())
             self.assertTrue((temp / "run/checkpoints/last").exists())
+            self.assertNotIn("complete", reporter.events)
+            self.assertEqual(reporter.events[-1], "error")
+
+    def test_failed_test_preserves_checkpoints_without_reporting_success(self):
+        class FailedTest(FakeEvaluator):
+            def evaluate(self, samples, instances, standardize=True, evaluation_seed=0):
+                results = super().evaluate(samples, instances, standardize, evaluation_seed)
+                if evaluation_seed == 20_000_000:
+                    for result in results:
+                        result.failed = True
+                        result.raw_reward = -5.0
+                        result.failure_reason = "pipeline timeout"
+                return results
+
+        with tempfile.TemporaryDirectory(dir=ROOT) as temporary:
+            temp = Path(temporary)
+            source = temp / "source" / "initialization" / "init"
+            source.mkdir(parents=True)
+            (source / "v1.py").write_text(
+                "def run(env_data, state, calc_makespan_fn):\n    return state\n",
+                encoding="utf-8",
+            )
+            reporter = RecordingReporter()
+            result = PaperRLTrainer(
+                FakeDomain, "fake", self.config(temp / "cache", checkpoints=True),
+                str(temp / "source"), str(temp / "run"), str(ROOT),
+                policy_factory=FakePolicy, evaluator_factory=FailedTest,
+                llm_client=FakeLLM(), reporter=reporter,
+            ).run()
+            self.assertEqual(result["status"], "test_failed")
+            self.assertIsNone(result["test_gap_percent"])
+            self.assertTrue((temp / "run/checkpoints/best").exists())
+            self.assertTrue((temp / "run/checkpoints/last").exists())
+            self.assertTrue((temp / "run/result.json").is_file())
+            self.assertNotIn("complete", reporter.events)
+            self.assertEqual(reporter.events[-1], "error")
 
     def test_two_generations_use_shared_n_by_k_batch_and_one_update_each(self):
         FakePolicy.update_calls = 0

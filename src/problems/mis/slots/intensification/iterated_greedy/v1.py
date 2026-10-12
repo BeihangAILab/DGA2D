@@ -21,7 +21,7 @@ def run(env_data, state, calc_makespan_fn):
         random.shuffle(order)
         order.sort(key=lambda v: len(adj[v]) + random.random() * 2.0)
         for vertex in order:
-            if not (adj[vertex] & chosen):
+            if adj[vertex].isdisjoint(chosen):
                 chosen.add(vertex)
         if len(chosen) <= len(selected):
             continue

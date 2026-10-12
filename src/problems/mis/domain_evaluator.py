@@ -32,6 +32,7 @@ from src.core.configuration import problem_data_dir
 
 # ── Module-level config (set by Hydra before loading) ──
 INVALID_SCORE = 999999999.0
+SEQUENCE_ONLY_OBJECTIVE = True
 MIS_LE2000_GROUP = "BHOSLIB_DIMACS_le2000"
 MIS_LE2000_SOURCE_GROUPS = ("BHOSLIB", "DIMACS_all", "DIMACS_subset")
 MIS_LE2000_EXCLUDED = {"c4000.5", "mann_a81", "keller6"}
@@ -162,18 +163,14 @@ def _count_and_check(seq, adj):
       (size, feasible) — size is meaningful only if feasible.
       If infeasible (adjacent 1s), returns (0, False).
     """
-    n = len(seq)
-    ones = []
-    for i in range(n):
-        if seq[i]:
-            ones.append(i)
+    ones = np.flatnonzero(seq).tolist()
+    remaining = set(ones)
 
     # Feasibility: for every pair of vertices in IS, no edge can exist
-    for idx, v in enumerate(ones):
-        neighbors = adj[v]
-        for u in ones[idx + 1 :]:
-            if u in neighbors:
-                return 0, False
+    for v in ones:
+        remaining.remove(v)
+        if not adj[v].isdisjoint(remaining):
+            return 0, False
 
     return len(ones), True
 
